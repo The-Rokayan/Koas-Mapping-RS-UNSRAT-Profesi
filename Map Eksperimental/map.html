@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Collaborative Map Editor</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet-minimap/dist/Control.MiniMap.min.css"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.css"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.Default.css"/>
+
+<style>
+
+#map{
+height:100vh;
+}
+
+.popup-input{
+width:95%;
+margin-top:3px;
+}
+
+.searchbox{
+position:absolute;
+top:10px;
+left:50px;
+z-index:1000;
+padding:6px;
+}
+
+</style>
+</head>
+
+<body>
+
+<input id="search" class="searchbox" placeholder="Search marker">
+
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-minimap/dist/Control.MiniMap.min.js"></script>
+<script src="https://unpkg.com/leaflet.markercluster/dist/leaflet.markercluster.js"></script>
+
+<script>
+
+/* ---------------- MAP ---------------- */
+
+var map=L.map('map',{
+crs:L.CRS.Simple,
+minZoom:-2,
+maxZoom:4,
+inertia:false
+})
+
+var bounds=[[0,0],[1053,1800]]
+
+L.imageOverlay("map.jpg",bounds).addTo(map)
+
+map.fitBounds(bounds)
+
+/* ---------------- EDGE PAN ---------------- */
+
+map.on("mousemove",function(e){
+
+var edge=40
+var size=map.getSize()
+var p=map.latLngToContainerPoint(e.latlng)
+
+var panX=0
+var panY=0
+
+if(p.x<edge) panX=-20
+if(p.x>size.x-edge) panX=20
+
+if(p.y<edge) panY=-20
+if(p.y>size.y-edge) panY=20
+
+if(panX!==0||panY!==0){
+map.panBy([panX,panY],{animate:false})
+}
+
+})
+
+/* disable right click menu */
+
+map.getContainer().addEventListener("contextmenu",function(e){
+e.preventDefault()
+})
+
+/* ---------------- MINIMAP ---------------- */
+
+var miniLayer=L.imageOverlay("map.jpg",bounds)
+new L.Control.MiniMap(miniLayer,{toggleDisplay:true}).addTo(map)
+
+/* ---------------- CLUSTER ---------------- */
+
+var cluster=L.markerClusterGroup({
+chunkedLoading:true,
+maxClusterRadius:40
+})
+
+map.addLayer(cluster)
+
+/* ---------------- CONFIG ---------------- */
+
+var apiURL="https://script.google.com/macros/s/AKfycbx2ByJdIC5EaJm6sVoEZgePx02IaD7a_M5bHOcupEqzihb66kixv2gaEYWfDwDPA7Tk/exec"
+
+var sheetBase="https://docs.google.com/spreadsheets/d/1durCtJ-WumfVgBOH6E_Yegc2LIUG98mHmAff-t63P0g/edit#gid=0&range=A"
+
+/* ---------------- STORAGE ---------------- */
+
+var markers={}
+var editingRows={}
+var undoStack=[]
+var editingMarker = null
+var boxes={}
+/* ---------------- Box Loader ------------- */
+function loadBoxes(){
+
+fetch(apiURL+"?mode=boxes&t="+Date.now(),{cache:"no-store"})
+.then(r=>r.json())
+.then(data=>{
+
+var seen={}
+
+data.forEach(b=>{
+
+var row=b.row
+
+var x1=Number(b.x1)
+var y1=Number(b.y1)
+var x2=Number(b.x2)
+var y2=Number(b.y2)
+
+if([x1,y1,x2,y2].some(v=>isNaN(v))) return
+
+seen[row]=true
+
+var bounds=[
+[Math.min(y1,y2),Math.min(x1,x2)],
+[Math.max(y1,y2),Math.max(x1,x2)]
+]
+
+if(!boxes[row]){
+
+var rect=L.rectangle(bounds,{
+color:"purple",
+weight:2,
+fill:false
+})
+
+rect.addTo(map)
+
+boxes[row]=rect
+
+}
+else{
+
+boxes[row].setBounds(bounds)
+
+}
+
+})
+
+Object.keys(boxes).forEach(r=>{
+
+if(!seen[r]){
+
+map.removeLayer(boxes[r])
+delete boxes[r]
+
+}
+
+})
+
+})
+
+}
+/* ---------------- UNDO ---------------- */
+
+function pushUndo(a){
+undoStack.push(a)
+}
+
+function undo(){
+
+var action=undoStack.pop()
+if(!action) return
+
+if(action.type==="move"){
+
+fetch(apiURL+
+"?mode=update"+
+"&row="+action.row+
+"&x="+action.oldX+
+"&y="+action.oldY+
+"&t="+Date.now())
+
+}
+
+if(action.type==="delete"){
+
+fetch(apiURL+
+"?name="+encodeURIComponent(action.name)+
+"&x="+action.x+
+"&y="+action.y+
+"&desc="+encodeURIComponent(action.desc)+
+"&cat="+encodeURIComponent(action.cat)+
+"&t="+Date.now())
+
+}
+
+if(action.type==="create"){
+
+if(action.row){
+
+fetch(apiURL+
+"?mode=delete"+
+"&row="+action.row+
+"&t="+Date.now())
+
+}
+
+}
+
+if(action.type==="text"){
+
+fetch(apiURL+
+"?mode=text"+
+"&row="+action.row+
+"&name="+encodeURIComponent(action.oldName)+
+"&desc="+encodeURIComponent(action.oldDesc)+
+"&t="+Date.now())
+
+}
+
+loadPoints()
+
+}
+
+/* CTRL+Z */
+
+document.addEventListener("keydown",function(e){
+
+if(e.ctrlKey && e.key==="z"){
+e.preventDefault()
+undo()
+}
+
+})
+
+/* ---------------- COLORS ---------------- */
+
+var colors={
+Red:"red",
+Blue:"blue",
+Green:"green",
+Yellow:"orange",
+Default:"black"
+}
+
+function markerIcon(color){
+
+return L.icon({
+iconUrl:"https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-"+color+".png",
+shadowUrl:"https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+iconSize:[25,41],
+iconAnchor:[12,41]
+})
+
+}
+
+/* ---------------- DELETE ---------------- */
+
+function deleteMarker(row){
+
+if(!confirm("Delete marker?")) return
+
+var m=markers[row]
+var p=m.getLatLng()
+
+pushUndo({
+type:"delete",
+name:m.name,
+desc:"",
+cat:m.category,
+x:Math.round(p.lng),
+y:Math.round(p.lat)
+})
+
+fetch(apiURL+"?mode=delete&row="+row+"&t="+Date.now())
+
+cluster.removeLayer(m)
+delete markers[row]
+
+}
+
+/* ---------------- TEXT UPDATE ---------------- */
+
+function updateText(row){
+
+var marker=markers[row]
+
+var oldName=marker.name
+var oldDesc=""
+
+var name=document.getElementById("name_"+row).value
+var desc=document.getElementById("desc_"+row).value
+
+pushUndo({
+type:"text",
+row:row,
+oldName:oldName,
+oldDesc:oldDesc
+})
+
+marker.name=name
+
+fetch(apiURL+
+"?mode=text"+
+"&row="+row+
+"&name="+encodeURIComponent(name)+
+"&desc="+encodeURIComponent(desc)+
+"&t="+Date.now())
+
+}
+
+/* ---------------- POPUP ---------------- */
+
+function popupContent(row,name,desc,x,y){
+
+var sheetLink=sheetBase+row
+
+return `
+<b>Marker</b><br>
+
+Nama:<br>
+<input class="popup-input"
+id="name_${row}"
+value="${name}"
+onfocus="editingMarker=${row}"
+onblur="editingMarker=null">
+
+Nomor RM:<br>
+<input class="popup-input"
+id="desc_${row}"
+value="${desc}"
+onfocus="editingMarker=${row}"
+onblur="editingMarker=null">
+
+<br>X:${x} Y:${y}
+
+<br><a href="${sheetLink}" target="_blank">Open Sheet Row</a>
+
+<br>
+<button type="button" onclick="updateText(${row})">Save</button>
+<button type="button" onclick="deleteMarker(${row})">Delete</button>
+`
+if(markers[row].isPopupOpen()) return
+if(editingMarker === row || markers[row].isPopupOpen()) return
+}
+
+/* ---------------- LOAD MARKERS ---------------- */
+
+function loadPoints(){
+
+fetch(apiURL+"?mode=read&t="+Date.now(),{cache:"no-store"})
+.then(r=>r.json())
+.then(data=>{
+
+var seen={}
+
+data.forEach(p=>{
+
+var row=p.row
+
+var name=p.name||""
+var desc=p.desc||""
+var x=Number(p.x)
+var y=Number(p.y)
+var cat=p.cat||"Default"
+
+if(isNaN(x)||isNaN(y)) return
+
+seen[row]=true
+
+var color=colors[cat]||colors.Default
+
+if(!markers[row]){
+
+var marker=L.marker([y,x],{
+icon:markerIcon(color),
+draggable:true
+})
+
+cluster.addLayer(marker)
+
+markers[row]=marker
+
+marker.row=row
+marker.name=name
+marker.category=cat
+
+marker.bindPopup(
+popupContent(row,name,desc,x,y)
+)
+
+/* drag start */
+
+marker.on("dragstart",function(){
+
+map.dragging.disable()
+
+var p=marker.getLatLng()
+
+marker._oldX=Math.round(p.lng)
+marker._oldY=Math.round(p.lat)
+
+})
+
+/* drag end */
+
+marker.on("dragend",function(e){
+
+map.dragging.enable()
+
+var p=e.target.getLatLng()
+
+var nx=Math.round(p.lng)
+var ny=Math.round(p.lat)
+
+pushUndo({
+type:"move",
+row:row,
+oldX:marker._oldX,
+oldY:marker._oldY
+})
+
+fetch(apiURL+
+"?mode=update"+
+"&row="+row+
+"&x="+nx+
+"&y="+ny+
+"&t="+Date.now())
+
+})
+
+marker.on("contextmenu",function(){
+deleteMarker(row)
+})
+
+}
+
+else{
+
+if(editingMarker === row) return
+
+markers[row].setLatLng([y,x])
+}
+
+})
+
+Object.keys(markers).forEach(r=>{
+
+if(!seen[r]){
+
+cluster.removeLayer(markers[r])
+delete markers[r]
+
+}
+
+})
+
+})
+
+}
+
+/* ---------------- SEARCH ---------------- */
+
+document.getElementById("search").addEventListener("input",function(){
+
+var q=this.value.toLowerCase()
+
+Object.values(markers).forEach(m=>{
+
+if(!m.name) return
+
+if(m.name.toLowerCase().includes(q)){
+m.setOpacity(1)
+}else{
+m.setOpacity(0.2)
+}
+
+})
+
+})
+
+/* ---------------- ADD MARKER ---------------- */
+
+map.on("click",function(e){
+
+var x=Math.round(e.latlng.lng)
+var y=Math.round(e.latlng.lat)
+
+var name=prompt("Nama?")
+if(!name) return
+
+var desc=prompt("Nomor RM?")||""
+var cat=prompt("Warna? (Red/Blue/Green/Yellow)")||"Default"
+
+pushUndo({type:"create"})
+
+fetch(apiURL+
+"?name="+encodeURIComponent(name)+
+"&x="+x+
+"&y="+y+
+"&desc="+encodeURIComponent(desc)+
+"&cat="+encodeURIComponent(cat)+
+"&t="+Date.now())
+
+})
+
+/* ---------------- AUTO REFRESH ---------------- */
+
+loadPoints()
+loadBoxes()
+
+setInterval(function(){
+loadPoints()
+loadBoxes()
+},1000)
+
+</script>
+
+</body>
+</html>
