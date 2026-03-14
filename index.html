@@ -16,7 +16,7 @@
         #uiPanel {
             position: fixed;
             top: 10px;
-            left: 50px; /* adjusted to clear Leaflet zoom controls */
+            left: 50px;
             z-index: 999999;
             background: white;
             padding: 10px;
@@ -218,7 +218,7 @@ function loadBoxes(){
                     weight: 2,
                     fillColor: b.fill,
                     fillOpacity: b.fillOpacity
-                }).addTo(boxGroup); // Add to group, not map directly
+                }).addTo(boxGroup);
 
                 boxes[row].bindTooltip(
                     "<b>" + b.room + "</b><br>People: " + b.people,
@@ -328,6 +328,7 @@ function updateText(row){
     var marker = markers[row];
     var name = document.getElementById("name_" + row).value;
     var desc = document.getElementById("desc_" + row).value;
+    var kapten = document.getElementById("kapten_" + row).value; // NEW: Get Kapten value
     var cat = marker.category; 
 
     pushUndo({
@@ -338,8 +339,10 @@ function updateText(row){
     });
 
     marker.name = name;
+    marker.kapten = kapten; // NEW: Store it locally to update state
 
-    fetch(apiURL + "?mode=text&row=" + row + "&name=" + encodeURIComponent(name) + "&desc=" + encodeURIComponent(desc) + "&cat=" + encodeURIComponent(cat) + "&t=" + Date.now())
+    // NEW: Added &kapten= to the fetch URL
+    fetch(apiURL + "?mode=text&row=" + row + "&name=" + encodeURIComponent(name) + "&desc=" + encodeURIComponent(desc) + "&kapten=" + encodeURIComponent(kapten) + "&cat=" + encodeURIComponent(cat) + "&t=" + Date.now())
     .then(response => {
         if(response.ok) {
             console.log("Update successful");
@@ -359,7 +362,8 @@ function saveLocation(row, location) {
 }
 
 /* ---------------- POPUP ---------------- */
-function popupContent(row, name, desc, x, y, patientRoom){
+// NEW: Added 'kapten' to the function arguments
+function popupContent(row, name, desc, x, y, patientRoom, kapten){
     var sheetLink = sheetBase + row;
 
     return `
@@ -370,6 +374,9 @@ function popupContent(row, name, desc, x, y, patientRoom){
 
         Nomor RM:<br>
         <input class="popup-input" id="desc_${row}" value="${desc}" onfocus="editingMarker=${row}" onblur="editingMarker=null">
+
+        Kapten:<br>
+        <input class="popup-input" id="kapten_${row}" value="${kapten}" onfocus="editingMarker=${row}" onblur="editingMarker=null">
 
         <small>Current: <b>${patientRoom || 'Detecting...'}</b></small>
         <hr>
@@ -397,6 +404,7 @@ function loadPoints(){
             var row = p.row;
             var name = p.name || "";
             var desc = p.desc || "";
+            var kapten = p.kapten || ""; // NEW: Extract kapten from API
             var x = Number(p.x);
             var y = Number(p.y);
             var cat = p.cat || "Default";
@@ -418,10 +426,12 @@ function loadPoints(){
 
                 marker.row = row;
                 marker.name = name;
+                marker.kapten = kapten; // NEW: Store in marker object
                 marker.category = cat;
                 marker.patientRoom = patientRoom;
 
-                marker.bindPopup(popupContent(row, name, desc, x, y, patientRoom));
+                // NEW: Pass kapten to popup
+                marker.bindPopup(popupContent(row, name, desc, x, y, patientRoom, kapten));
 
                 marker.on("dragstart", function(){
                     map.dragging.disable();
@@ -460,7 +470,10 @@ function loadPoints(){
 
                 markers[row].setLatLng([y, x]);
                 markers[row].patientRoom = patientRoom; 
-                markers[row].setPopupContent(popupContent(row, name, desc, x, y, patientRoom));
+                markers[row].kapten = kapten; // NEW: update local state
+                
+                // NEW: Pass kapten to popup
+                markers[row].setPopupContent(popupContent(row, name, desc, x, y, patientRoom, kapten));
             }
         });
 
@@ -489,7 +502,6 @@ document.getElementById("search").addEventListener("input", function(){
 
 /* ---------------- ADD MARKER ON CLICK ---------------- */
 map.on("click", function(e){
-    // Don't add a marker if we are in box-drawing mode
     var boxEditToggle = document.getElementById("enableBoxEdit");
     if(boxEditToggle && boxEditToggle.checked) return;
 
@@ -500,11 +512,13 @@ map.on("click", function(e){
     if(!name) return;
 
     var desc = prompt("Nomor RM?") || "";
+    var kapten = prompt("Kapten?") || ""; // NEW: Prompt for Kapten
     var cat = prompt("Warna? (Red/Blue/Green/Yellow)") || "Default";
 
     pushUndo({type: "create"});
 
-    fetch(apiURL + "?mode=addMarker&name=" + encodeURIComponent(name) + "&x=" + x + "&y=" + y + "&desc=" + encodeURIComponent(desc) + "&cat=" + encodeURIComponent(cat) + "&t=" + Date.now());
+    // NEW: added &kapten= to fetch
+    fetch(apiURL + "?mode=addMarker&name=" + encodeURIComponent(name) + "&x=" + x + "&y=" + y + "&desc=" + encodeURIComponent(desc) + "&kapten=" + encodeURIComponent(kapten) + "&cat=" + encodeURIComponent(cat) + "&t=" + Date.now());
 });
 
 /* ---------------- UI ACTIONS ---------------- */
